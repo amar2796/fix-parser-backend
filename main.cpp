@@ -10,6 +10,7 @@
 struct TagInfo {
     std::string name;
     std::unordered_map<std::string, std::string> values;
+    std::string why; // plain-English explanation of why this field matters
 };
 
 static const std::unordered_map<int, TagInfo>& getDictionary() {
@@ -340,6 +341,61 @@ static const std::unordered_map<int, TagInfo>& getDictionary() {
     return dict;
 }
 
+// Plain-English "why this field matters" explanations for the most common/important tags.
+// Used by the frontend walkthrough mode to teach, not just display.
+static const std::unordered_map<int, std::string>& getWhyExplanations() {
+    static const std::unordered_map<int, std::string> why = {
+        {8,   "Identifies which version of the FIX protocol this message follows. Both sides must agree on this or the message can't be interpreted correctly."},
+        {9,   "Tells the receiver exactly how many bytes to expect in the message body. If this doesn't match, the message is considered corrupt."},
+        {35,  "The single most important field in any FIX message — it tells the receiving system what KIND of message this is (an order, a fill, a cancel, etc.), which determines how every other field should be interpreted."},
+        {49,  "Identifies who is sending this message. Trading systems use this to route messages and apply the correct permissions/rules for that sender."},
+        {56,  "Identifies who this message is being sent TO. Combined with SenderCompID, this forms the unique 'conversation' between two trading parties."},
+        {34,  "A sequence number that increases with every message. If a number is skipped, the receiver knows a message was lost and can request it again."},
+        {52,  "The exact timestamp the message was sent. Used to detect stale messages and to reconstruct the true order of events during disputes."},
+        {11,  "The unique ID YOU assign to your order. This is how you (the client) refer back to this specific order in every future message about it — cancels, fills, replaces all reference this ID."},
+        {55,  "The ticker/instrument being traded. Get this wrong and you could buy or sell the completely wrong asset."},
+        {54,  "Tells the counterparty whether you're buying or selling. Get this backwards and the trade direction is reversed — a costly mistake."},
+        {38,  "How many shares/contracts/units you want to trade. This directly determines the size of your financial exposure."},
+        {40,  "Tells the exchange HOW to execute your order — at any price (Market), only at your specified price or better (Limit), or only after a trigger price is hit (Stop)."},
+        {44,  "The price you're willing to trade at. Only meaningful for Limit and Stop-Limit orders — Market orders execute at whatever price is available."},
+        {59,  "Tells the exchange how long your order should remain active — for the rest of the day, until cancelled, or it must fill immediately or be killed."},
+        {60,  "The exact time the trading decision was made (not when the message was sent). Regulators and exchanges use this for audit trails and timestamp accuracy checks."},
+        {37,  "The unique ID the EXCHANGE (not you) assigns to your order once it's accepted. You'll see this ID in all future updates about this order from the exchange's side."},
+        {39,  "Tells you the current lifecycle state of your order — is it brand new, partially filled, completely filled, or canceled? This is how you track an order's progress."},
+        {150, "Tells you specifically WHAT just happened to cause this Execution Report — was it a new acknowledgment, a partial fill, a full fill, or a cancellation?"},
+        {17,  "A unique ID for this specific execution event (like a single fill). Useful for reconciling trades against your own records."},
+        {14,  "The total quantity that has been filled so far across all fills for this order. Helps you track how much of your order remains unfilled."},
+        {151, "How much of your order quantity is still unfilled and working in the market right now."},
+        {6,   "The average price across all fills for this order so far — useful when an order fills in multiple pieces at different prices."},
+        {41,  "When canceling or replacing an order, this points back to the ClOrdID of the order you're trying to modify. Without this, the exchange wouldn't know which order you mean."},
+        {1,   "Identifies which trading account this order belongs to — important for firms managing multiple client accounts through the same connection."},
+        {21,  "Tells the broker how much they're allowed to intervene with your order — fully automated, automated with human oversight, or fully manual."},
+        {98,  "Specifies whether and how this connection's messages are encrypted. Most modern connections use 'None' since encryption is handled at the network layer instead."},
+        {108, "How many seconds of silence are allowed before each side must send a Heartbeat to prove the connection is still alive."},
+        {112, "A reference ID used when one side asks the other 'are you still there?' — the response must echo this same ID back."},
+        {45,  "Points to the sequence number (tag 34) of the message that caused this Reject — tells you exactly which message had the problem."},
+        {372, "Identifies which MESSAGE TYPE caused a Reject or Business Reject — helps pinpoint what kind of message the receiver couldn't process."},
+        {373, "Gives the specific technical REASON a message was rejected at the session level — e.g. a required tag was missing, or a value was invalid."},
+        {380, "Gives the specific business-level reason a message was rejected — different from a session reject, this means the message was understood but couldn't be processed for a business reason."},
+        {262, "A unique ID for this specific market data request — the exchange includes this same ID in its responses so you know which request they're answering."},
+        {268, "Tells the receiver how many individual market data entries (price levels, trades, etc.) follow in this message. This is what makes 'repeating groups' work."},
+        {269, "Tells you what KIND of market data this entry represents — a bid price, an offer price, a trade, etc."},
+        {270, "The actual price for this market data entry — a bid price, offer price, or trade price depending on the entry type."},
+        {271, "The size/quantity available at this price level (for quotes) or the size that traded (for trade entries)."},
+        {453, "Tells the receiver how many party identification blocks (broker, client, firm, etc.) follow in this message."},
+        {448, "Identifies a specific party (a person, firm, or system) involved in this transaction — combined with PartyRole to clarify exactly what role they played."},
+        {452, "Clarifies WHAT ROLE the associated PartyID plays — are they the executing firm, the client, the clearing firm? Critical for regulatory reporting."},
+        {102, "Explains exactly why your cancel request was rejected — e.g. it was too late to cancel, or the exchange doesn't recognize that order."},
+        {103, "Explains exactly why your new order was rejected outright — e.g. unknown symbol, market closed, or order size exceeds allowed limits."},
+        {58,  "Free-text field used for human-readable explanations — often holds the specific reason behind a rejection or status change when the structured fields aren't detailed enough."},
+        {15,  "Specifies the currency the price and amounts in this message are denominated in — critical for any cross-currency or international trading."},
+        {528, "Tells the exchange in what capacity you're trading — as an agent for someone else, or as a principal trading your own firm's capital. This affects margin and regulatory treatment."},
+        {10,  "A mathematical checksum of the entire message. If even one character gets corrupted in transit, this number won't match anymore — it's the message's built-in tamper/corruption detector."},
+    };
+    return why;
+}
+
+
 // Tags that belong to the FIX Header
 static bool isHeaderTag(int tag) {
     static const std::unordered_set<int> headerTags = {
@@ -555,6 +611,16 @@ int main() {
                 entry["name"] = fieldName;
                 entry["meaning"] = rawVal;
             }
+
+            // Plain-English "why this matters" explanation, for teaching mode
+            const auto& whyMap = getWhyExplanations();
+            auto whyIt = whyMap.find(tok.tag);
+            if (whyIt != whyMap.end()) {
+                entry["why"] = whyIt->second;
+            } else {
+                entry["why"] = "Part of this message's data — not one of the most commonly explained fields, but still required by the FIX dictionary for this tag.";
+            }
+
 
             // Detect if this tag is a repeating-group counter
             bool isGroupCounter = groupStarts.count(tok.tag) > 0;
