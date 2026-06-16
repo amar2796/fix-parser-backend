@@ -879,12 +879,31 @@ static std::string buildSummary(const std::string& body, char delim) {
     return "Unknown message";
 }
 
+// Checks whether an extracted segment looks like a real FIX message
+// (must contain BeginString, BodyLength, and MsgType at minimum).
+// Anything else (blank lines, log noise, partial fragments) is rejected.
+static bool looksLikeFixMessage(const std::string& segment, char delim) {
+    std::vector<FixToken> tokens = tokenize(segment, delim);
+    bool has8 = false, has9 = false, has35 = false;
+    for (const auto& t : tokens) {
+        if (t.tag == 8) has8 = true;
+        if (t.tag == 9) has9 = true;
+        if (t.tag == 35) has35 = true;
+    }
+    return has8 && has9 && has35;
+}
+
 // Splits a raw multi-message log block into individual FIX messages.
-// Each message always starts with "8=FIX" (BeginString) — used as the boundary marker.
+// Handles garbage before/after each message (e.g. log timestamps, stray text,
+// blank lines, or junk lines mixed in anywhere) by anchoring strictly on the
+// "8=FIX...<delim>" start and the closing "10=XXX<delim>" checksum end of
+// each message, and discarding any segment that doesn't contain the minimum
+// required tags (8, 9, 35) to be considered a real FIX message.
 static std::vector<std::string> splitLogIntoMessages(const std::string& log) {
     std::vector<std::string> messages;
     std::vector<size_t> starts;
 
+    // Step 1: find every "8=FIX" occurrence — these are candidate message starts.
     size_t pos = 0;
     while (true) {
         size_t found = log.find("8=FIX", pos);
@@ -895,13 +914,54 @@ static std::vector<std::string> splitLogIntoMessages(const std::string& log) {
 
     for (size_t i = 0; i < starts.size(); ++i) {
         size_t begin = starts[i];
-        size_t end = (i + 1 < starts.size()) ? starts[i + 1] : log.size();
-        std::string msg = log.substr(begin, end - begin);
-        // trim trailing whitespace/newlines
-        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' ')) {
+        // Search window: from this start up to (but not including) the next
+        // candidate start, or end of log if this is the last one.
+        size_t windowEnd = (i + 1 < starts.size()) ? starts[i + 1] : log.size();
+        std::string window = log.substr(begin, windowEnd - begin);
+
+        // Step 2: detect the delimiter used in THIS window specifically
+        // (different messages in the same log could theoretically use
+        // different delimiters if pasted from different sources).
+        char delim = detectDelimiter(window);
+
+        // Step 3: find the closing "10=" tag within this window and trim
+        // everything after its value + delimiter — this removes trailing
+        // garbage (e.g. log metadata, extra text) that isn't part of the
+        // actual FIX message.
+        size_t tag10Pos = std::string::npos;
+        for (size_t j = 0; j + 3 <= window.size(); ++j) {
+            if (window[j] == '1' && window[j+1] == '0' && window[j+2] == '=') {
+                if (j == 0 || window[j-1] == delim) {
+                    tag10Pos = j;
+                }
+            }
+        }
+
+        std::string msg;
+        if (tag10Pos != std::string::npos) {
+            size_t valStart = tag10Pos + 3;
+            size_t valEnd = window.find(delim, valStart);
+            if (valEnd == std::string::npos) valEnd = window.size();
+            else valEnd += 1; // include the trailing delimiter itself
+            msg = window.substr(0, valEnd);
+        } else {
+            // No checksum found in this window — fall back to the whole
+            // window (will likely fail validation downstream, but we don't
+            // silently truncate real data we can't confirm the boundary of).
+            msg = window;
+        }
+
+        // trim trailing whitespace/newlines just in case
+        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' ' || msg.back() == '\t')) {
             msg.pop_back();
         }
-        if (!msg.empty()) messages.push_back(msg);
+
+        // Step 4: reject anything that doesn't have the minimum required
+        // tags to be considered a real FIX message (filters out blank
+        // lines, stray log text, separators, partial fragments, etc).
+        if (!msg.empty() && looksLikeFixMessage(msg, delim)) {
+            messages.push_back(msg);
+        }
     }
 
     return messages;
