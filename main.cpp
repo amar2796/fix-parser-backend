@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <cctype>
 
 // ---------- FIX Tag Dictionary ----------
@@ -13,97 +14,380 @@ struct TagInfo {
 
 static const std::unordered_map<int, TagInfo>& getDictionary() {
     static const std::unordered_map<int, TagInfo> dict = {
-        {8,  {"BeginString", {}}},
-        {9,  {"BodyLength", {}}},
-        {35, {"MsgType", {
-            {"D", "New Order Single"},
-            {"8", "Execution Report"},
-            {"0", "Heartbeat"},
-            {"1", "Test Request"},
-            {"2", "Resend Request"},
-            {"3", "Reject"},
-            {"4", "Sequence Reset"},
-            {"5", "Logout"},
-            {"A", "Logon"},
-            {"F", "Order Cancel Request"},
-            {"G", "Order Cancel/Replace Request"},
-            {"9", "Order Cancel Reject"}
+        // ---- Standard Header ----
+        {8,   {"BeginString", {}}},
+        {9,   {"BodyLength", {}}},
+        {35,  {"MsgType", {
+            {"0","Heartbeat"},{"1","Test Request"},{"2","Resend Request"},{"3","Reject"},
+            {"4","Sequence Reset"},{"5","Logout"},{"6","Indication of Interest"},
+            {"7","Advertisement"},{"8","Execution Report"},{"9","Order Cancel Reject"},
+            {"A","Logon"},{"B","News"},{"C","Email"},{"D","New Order Single"},
+            {"E","New Order List"},{"F","Order Cancel Request"},
+            {"G","Order Cancel/Replace Request"},{"H","Order Status Request"},
+            {"J","Allocation Instruction"},{"K","List Cancel Request"},
+            {"L","List Execute"},{"M","List Status Request"},{"N","List Status"},
+            {"P","Allocation Instruction Ack"},{"Q","Don't Know Trade"},
+            {"R","Quote Request"},{"S","Quote"},{"T","Settlement Instructions"},
+            {"V","Market Data Request"},{"W","Market Data Snapshot/Full Refresh"},
+            {"X","Market Data Incremental Refresh"},{"Y","Market Data Request Reject"},
+            {"Z","Quote Cancel"},{"a","Quote Status Request"},
+            {"b","Mass Quote Acknowledgement"},{"c","Security Definition Request"},
+            {"d","Security Definition"},{"e","Security Status Request"},
+            {"f","Security Status"},{"g","Trading Session Status Request"},
+            {"h","Trading Session Status"},{"i","Mass Quote"},
+            {"j","Business Message Reject"},{"k","Bid Request"},
+            {"l","Bid Response"},{"m","List Strike Price"},
+            {"AE","Trade Capture Report"},{"AF","Order Mass Status Request"},
+            {"AG","Quote Request Reject"},{"AJ","Confirmation"},
+            {"AK","Settlement Instruction Request"},
         }}},
-        {49, {"SenderCompID", {}}},
-        {56, {"TargetCompID", {}}},
-        {34, {"MsgSeqNum", {}}},
-        {52, {"SendingTime", {}}},
-        {11, {"ClOrdID", {}}},
-        {55, {"Symbol", {}}},
-        {54, {"Side", {
-            {"1", "Buy"},
-            {"2", "Sell"},
-            {"3", "Buy minus"},
-            {"4", "Sell plus"},
-            {"5", "Sell short"},
-            {"6", "Sell short exempt"}
+        {49,  {"SenderCompID", {}}},
+        {50,  {"SenderSubID", {}}},
+        {56,  {"TargetCompID", {}}},
+        {57,  {"TargetSubID", {}}},
+        {34,  {"MsgSeqNum", {}}},
+        {43,  {"PossDupFlag", {{"Y","Yes (possible duplicate)"},{"N","No"}}}},
+        {52,  {"SendingTime", {}}},
+        {97,  {"PossResend", {{"Y","Yes"},{"N","No"}}}},
+        {115, {"OnBehalfOfCompID", {}}},
+        {128, {"DeliverToCompID", {}}},
+        {142, {"SenderLocationID", {}}},
+        {143, {"TargetLocationID", {}}},
+        {369, {"LastMsgSeqNumProcessed", {}}},
+        {212, {"XmlDataLen", {}}},
+        {213, {"XmlData", {}}},
+
+        // ---- Common Order fields ----
+        {1,   {"Account", {}}},
+        {6,   {"AvgPx", {}}},
+        {11,  {"ClOrdID", {}}},
+        {12,  {"Commission", {}}},
+        {13,  {"CommType", {{"1","Per unit"},{"2","Percent"},{"3","Absolute"}}}},
+        {14,  {"CumQty", {}}},
+        {15,  {"Currency", {}}},
+        {17,  {"ExecID", {}}},
+        {18,  {"ExecInst", {
+            {"0","Stay on offerside"},{"1","Not held"},{"2","Work"},
+            {"3","Go along"},{"4","Over the day"},{"5","Held"},
+            {"6","Participate don't initiate"},{"7","Strict scale"},
+            {"G","Insert"},{"I","Try to scale"},{"L","Last peg"}
         }}},
-        {38, {"OrderQty", {}}},
-        {40, {"OrdType", {
-            {"1", "Market"},
-            {"2", "Limit"},
-            {"3", "Stop"},
-            {"4", "Stop Limit"},
-            {"5", "Market On Close"},
-            {"P", "Pegged"}
+        {19,  {"ExecRefID", {}}},
+        {20,  {"ExecTransType", {{"0","New"},{"1","Cancel"},{"2","Correct"},{"3","Status"}}}},
+        {21,  {"HandlInst", {
+            {"1","Automated execution, no broker intervention"},
+            {"2","Automated execution, broker intervention OK"},
+            {"3","Manual order"}
         }}},
-        {44, {"Price", {}}},
-        {59, {"TimeInForce", {
-            {"0", "Day"},
-            {"1", "Good Till Cancel"},
-            {"2", "At the Opening"},
-            {"3", "Immediate or Cancel"},
-            {"4", "Fill or Kill"},
-            {"6", "Good Till Date"}
+        {22,  {"IDSource", {
+            {"1","CUSIP"},{"2","SEDOL"},{"3","QUIK"},{"4","ISIN"},
+            {"5","RIC"},{"6","ISO Currency Code"},{"8","Exchange Symbol"}
         }}},
-        {1,  {"Account", {}}},
-        {21, {"HandlInst", {
-            {"1", "Automated execution, no broker intervention"},
-            {"2", "Automated execution, broker intervention OK"},
-            {"3", "Manual order"}
+        {23,  {"IOIID", {}}},
+        {25,  {"IOIQltyInd", {{"H","High"},{"L","Low"},{"M","Medium"}}}},
+        {27,  {"IOIQty", {}}},
+        {28,  {"IOITransType", {{"N","New"},{"C","Cancel"},{"R","Replace"}}}},
+        {29,  {"LastCapacity", {{"1","Agent"},{"2","Cross as agent"},{"3","Cross as principal"},{"4","Principal"}}}},
+        {30,  {"LastMkt", {}}},
+        {31,  {"LastPx", {}}},
+        {32,  {"LastShares", {}}},
+        {37,  {"OrderID", {}}},
+        {38,  {"OrderQty", {}}},
+        {39,  {"OrdStatus", {
+            {"0","New"},{"1","Partially Filled"},{"2","Filled"},
+            {"3","Done for Day"},{"4","Canceled"},{"5","Replaced"},
+            {"6","Pending Cancel"},{"7","Stopped"},{"8","Rejected"},
+            {"9","Suspended"},{"A","Pending New"},{"B","Calculated"},
+            {"C","Expired"},{"D","Accepted for Bidding"},{"E","Pending Replace"}
         }}},
-        {37, {"OrderID", {}}},
-        {39, {"OrdStatus", {
-            {"0", "New"},
-            {"1", "Partially Filled"},
-            {"2", "Filled"},
-            {"4", "Canceled"},
-            {"8", "Rejected"},
-            {"A", "Pending New"},
-            {"E", "Pending Replace"}
+        {40,  {"OrdType", {
+            {"1","Market"},{"2","Limit"},{"3","Stop"},{"4","Stop Limit"},
+            {"5","Market On Close"},{"6","With Or Without"},{"7","Limit Or Better"},
+            {"8","Limit With Or Without"},{"9","On Basis"},{"D","Previously Quoted"},
+            {"E","Previously Indicated"},{"P","Pegged"}
         }}},
+        {41,  {"OrigClOrdID", {}}},
+        {42,  {"OrigTime", {}}},
+        {44,  {"Price", {}}},
+        {45,  {"RefSeqNum", {}}},
+        {48,  {"SecurityID", {}}},
+        {54,  {"Side", {
+            {"1","Buy"},{"2","Sell"},{"3","Buy minus"},{"4","Sell plus"},
+            {"5","Sell short"},{"6","Sell short exempt"},{"7","Undisclosed"},
+            {"8","Cross"},{"9","Cross short"}
+        }}},
+        {55,  {"Symbol", {}}},
+        {58,  {"Text", {}}},
+        {59,  {"TimeInForce", {
+            {"0","Day"},{"1","Good Till Cancel"},{"2","At the Opening"},
+            {"3","Immediate or Cancel"},{"4","Fill or Kill"},
+            {"5","Good Till Crossing"},{"6","Good Till Date"}
+        }}},
+        {60,  {"TransactTime", {}}},
+        {62,  {"ValidUntilTime", {}}},
+        {63,  {"SettlmntTyp", {
+            {"0","Regular"},{"1","Cash"},{"2","Next Day"},{"3","T+2"},
+            {"4","T+3"},{"5","T+4"},{"6","Future"},{"7","When and if Issued"},
+            {"8","Sellers Option"},{"9","T+5"}
+        }}},
+        {64,  {"FutSettDate", {}}},
+        {65,  {"SymbolSfx", {}}},
+        {66,  {"ListID", {}}},
+        {67,  {"ListSeqNo", {}}},
+        {68,  {"TotNoOrders", {}}},
+        {69,  {"ListExecInst", {}}},
+        {70,  {"AllocID", {}}},
+        {71,  {"AllocTransType", {{"0","New"},{"1","Replace"},{"2","Cancel"}}}},
+        {72,  {"RefAllocID", {}}},
+        {73,  {"NoOrders", {}}},
+        {74,  {"AvgPxPrecision", {}}},
+        {75,  {"TradeDate", {}}},
+        {76,  {"ExecBroker", {}}},
+        {77,  {"PositionEffect", {{"O","Open"},{"C","Close"},{"R","Rolled"},{"F","FIFO"}}}},
+        {78,  {"NoAllocs", {}}},
+        {79,  {"AllocAccount", {}}},
+        {80,  {"AllocQty", {}}},
+        {81,  {"ProcessCode", {{"0","Regular"},{"1","Soft dollar"},{"2","Step-in"},{"3","Step-out"}}}},
+        {82,  {"NoRpts", {}}},
+        {83,  {"RptSeq", {}}},
+        {84,  {"CxlQty", {}}},
+        {85,  {"NoDlvyInst", {}}},
+        {87,  {"AllocStatus", {{"0","Accepted"},{"1","Rejected"},{"2","Partial accept"},{"3","Received"}}}},
+        {88,  {"AllocRejCode", {}}},
+        {89,  {"Signature", {}}},
+        {90,  {"SecureDataLen", {}}},
+        {91,  {"SecureData", {}}},
+        {93,  {"SignatureLength", {}}},
+        {94,  {"EmailType", {{"0","New"},{"1","Reply"},{"2","Admin reply"}}}},
+        {98,  {"EncryptMethod", {{"0","None / other"},{"1","PKCS"},{"2","DES"},{"3","PKCS/DES"},{"4","PGP/DES"},{"5","PGP/DES-MD5"},{"6","PEM/DES-MD5"}}}},
+        {99,  {"StopPx", {}}},
+        {100, {"ExDestination", {}}},
+        {102, {"CxlRejReason", {{"0","Too late to cancel"},{"1","Unknown order"},{"2","Broker option"},{"3","Order already pending cancel"}}}},
+        {103, {"OrdRejReason", {
+            {"0","Broker option"},{"1","Unknown symbol"},{"2","Exchange closed"},
+            {"3","Order exceeds limit"},{"4","Too late to enter"},{"5","Unknown order"},
+            {"6","Duplicate order"},{"8","Stale order"}
+        }}},
+        {104, {"IOIQualifier", {}}},
+        {106, {"Issuer", {}}},
+        {107, {"SecurityDesc", {}}},
+        {108, {"HeartBtInt", {}}},
+        {109, {"ClientID", {}}},
+        {110, {"MinQty", {}}},
+        {111, {"MaxFloor", {}}},
+        {112, {"TestReqID", {}}},
+        {113, {"ReportToExch", {{"Y","Yes"},{"N","No"}}}},
+        {114, {"LocateReqd", {{"Y","Yes"},{"N","No"}}}},
+        {116, {"OnBehalfOfSubID", {}}},
+        {117, {"QuoteID", {}}},
+        {118, {"NetMoney", {}}},
+        {119, {"SettlCurrAmt", {}}},
+        {120, {"SettlCurrency", {}}},
+        {121, {"ForexReq", {{"Y","Yes"},{"N","No"}}}},
+        {122, {"OrigSendingTime", {}}},
+        {123, {"GapFillFlag", {{"Y","Yes"},{"N","No"}}}},
+        {124, {"NoExecs", {}}},
+        {126, {"ExpireTime", {}}},
+        {127, {"DKReason", {
+            {"A","Unknown symbol"},{"B","Wrong side"},{"C","Quantity exceeds order"},
+            {"D","No matching order"},{"E","Price exceeds limit"},{"Z","Other"}
+        }}},
+        {129, {"DeliverToSubID", {}}},
+        {130, {"IOINaturalFlag", {{"Y","Yes"},{"N","No"}}}},
+        {131, {"QuoteReqID", {}}},
+        {132, {"BidPx", {}}},
+        {133, {"OfferPx", {}}},
+        {134, {"BidSize", {}}},
+        {135, {"OfferSize", {}}},
+        {136, {"NoMiscFees", {}}},
+        {137, {"MiscFeeAmt", {}}},
+        {138, {"MiscFeeCurr", {}}},
+        {139, {"MiscFeeType", {{"1","Regulatory"},{"2","Tax"},{"3","Local commission"},{"4","Exchange fees"}}}},
+        {140, {"PrevClosePx", {}}},
+        {141, {"ResetSeqNumFlag", {{"Y","Yes"},{"N","No"}}}},
+        {144, {"NoRelatedSym", {}}},
+        {146, {"NoRelatedSym", {}}},
         {150, {"ExecType", {
-            {"0", "New"},
-            {"1", "Partial Fill"},
-            {"2", "Fill"},
-            {"4", "Canceled"},
-            {"8", "Rejected"}
+            {"0","New"},{"1","Partial Fill"},{"2","Fill"},{"3","Done for Day"},
+            {"4","Canceled"},{"5","Replaced"},{"6","Pending Cancel"},
+            {"7","Stopped"},{"8","Rejected"},{"9","Suspended"},
+            {"A","Pending New"},{"B","Calculated"},{"C","Expired"},
+            {"D","Restated"},{"E","Pending Replace"},{"F","Trade"},
+            {"G","Trade Correct"},{"H","Trade Cancel"},{"I","Order Status"}
         }}},
         {151, {"LeavesQty", {}}},
-        {14,  {"CumQty", {}}},
-        {6,   {"AvgPx", {}}},
-        {10, {"CheckSum", {}}}
+        {152, {"CashOrderQty", {}}},
+        {161, {"AllocText", {}}},
+        {167, {"SecurityType", {
+            {"CS","Common Stock"},{"PS","Preferred Stock"},{"FUT","Future"},
+            {"OPT","Option"},{"FOR","Foreign Exchange"},{"CORP","Corporate Bond"},
+            {"CB","Convertible Bond"},{"MLEG","Multileg"},{"BOND","Bond"}
+        }}},
+        {172, {"SettlInstMode", {}}},
+        {198, {"SecondaryOrderID", {}}},
+        {200, {"MaturityMonthYear", {}}},
+        {201, {"PutOrCall", {{"0","Put"},{"1","Call"}}}},
+        {202, {"StrikePrice", {}}},
+        {204, {"CustomerOrFirm", {{"0","Customer"},{"1","Firm"}}}},
+        {206, {"OptAttribute", {}}},
+        {207, {"SecurityExchange", {}}},
+        {223, {"CouponRate", {}}},
+        {231, {"ContractMultiplier", {}}},
+        {262, {"MDReqID", {}}},
+        {263, {"SubscriptionRequestType", {{"0","Snapshot"},{"1","Snapshot+Updates"},{"2","Unsubscribe"}}}},
+        {264, {"MarketDepth", {}}},
+        {265, {"MDUpdateType", {{"0","Full Refresh"},{"1","Incremental Refresh"}}}},
+        {266, {"AggregatedBook", {{"Y","Yes"},{"N","No"}}}},
+        {267, {"NoMDEntryTypes", {}}},
+        {268, {"NoMDEntries", {}}},
+        {269, {"MDEntryType", {
+            {"0","Bid"},{"1","Offer"},{"2","Trade"},{"3","Index Value"},
+            {"4","Opening Price"},{"5","Closing Price"},{"6","Settlement Price"},
+            {"7","Trading Session High Price"},{"8","Trading Session Low Price"},
+            {"9","Trading Session VWAP Price"}
+        }}},
+        {270, {"MDEntryPx", {}}},
+        {271, {"MDEntrySize", {}}},
+        {272, {"MDEntryDate", {}}},
+        {273, {"MDEntryTime", {}}},
+        {274, {"TickDirection", {{"0","Plus tick"},{"1","Zero-plus tick"},{"2","Minus tick"},{"3","Zero-minus tick"}}}},
+        {275, {"MDMkt", {}}},
+        {276, {"QuoteCondition", {}}},
+        {277, {"TradeCondition", {}}},
+        {278, {"MDEntryID", {}}},
+        {279, {"MDUpdateAction", {{"0","New"},{"1","Change"},{"2","Delete"}}}},
+        {280, {"MDEntryRefID", {}}},
+        {281, {"MDReqRejReason", {
+            {"0","Unknown symbol"},{"1","Duplicate MDReqID"},{"2","Insufficient bandwidth"},
+            {"3","Insufficient permissions"},{"4","Unsupported SubscriptionRequestType"}
+        }}},
+        {282, {"MDEntryOriginator", {}}},
+        {283, {"LocationID", {}}},
+        {284, {"DeskID", {}}},
+        {286, {"OpenCloseSettlFlag", {{"0","Daily open"},{"1","Session open"},{"2","Delivery settlement"}}}},
+        {288, {"ActiveFlag", {}}},
+        {289, {"IndicativeAuctionFlag", {}}},
+        {290, {"TradSesReqID", {}}},
+        {291, {"TradSesMethod", {{"1","Electronic"},{"2","Open outcry"},{"3","Two party"}}}},
+        {292, {"TradSesMode", {{"1","Testing"},{"2","Simulated"},{"3","Production"}}}},
+        {294, {"SubscriptionRequestType", {}}},
+        {297, {"TradSesStatus", {{"1","Halted"},{"2","Open"},{"3","Closed"},{"4","Pre-Open"},{"5","Pre-Close"}}}},
+        {299, {"QuoteEntryID", {}}},
+        {300, {"QuoteRejectReason", {}}},
+        {301, {"QuoteResponseLevel", {}}},
+        {302, {"QuoteSetID", {}}},
+        {303, {"QuoteRequestType", {{"1","Manual"},{"2","Automatic"}}}},
+        {304, {"TotNoQuoteEntries", {}}},
+        {305, {"UnderlyingIDSource", {}}},
+        {307, {"UnderlyingSymbol", {}}},
+        {336, {"TradingSessionID", {}}},
+        {363, {"AllocLinkID", {}}},
+        {372, {"RefMsgType", {}}},
+        {373, {"SessionRejectReason", {
+            {"0","Invalid tag number"},{"1","Required tag missing"},
+            {"2","Tag not defined for this message type"},{"3","Undefined tag"},
+            {"4","Tag specified without a value"},{"5","Value is incorrect"},
+            {"6","Incorrect data format for value"},{"7","Decryption problem"},
+            {"8","Signature problem"},{"9","CompID problem"},
+            {"10","SendingTime accuracy problem"},{"11","Invalid MsgType"}
+        }}},
+        {380, {"BusinessRejectReason", {
+            {"0","Other"},{"1","Unknown ID"},{"2","Unknown Security"},
+            {"3","Unsupported Message Type"},{"4","Application not available"},
+            {"5","Conditionally Required Field Missing"}
+        }}},
+        {382, {"NoContraBrokers", {}}},
+        {423, {"PriceType", {{"1","Percentage"},{"2","Per unit"},{"3","Fixed amount"},{"6","Yield"}}}},
+        {432, {"ExpireDate", {}}},
+        {434, {"CxlRejResponseTo", {{"1","Order Cancel Request"},{"2","Order Cancel/Replace Request"}}}},
+        {442, {"MultiLegReportingType", {{"1","Single Security"},{"2","Individual leg"},{"3","Multileg security"}}}},
+        {447, {"PartyIDSource", {}}},
+        {448, {"PartyID", {}}},
+        {452, {"PartyRole", {
+            {"1","Executing Firm"},{"2","Broker of Credit"},{"3","Client ID"},
+            {"4","Clearing Firm"},{"5","Investor ID"},{"11","Order Origination Firm"}
+        }}},
+        {453, {"NoPartyIDs", {}}},
+        {454, {"NoSecurityAltID", {}}},
+        {460, {"Product", {}}},
+        {461, {"CFICode", {}}},
+        {462, {"UnderlyingProduct", {}}},
+        {487, {"TradeReportTransType", {{"0","New"},{"1","Cancel"},{"2","Replace"}}}},
+        {527, {"SecondaryExecID", {}}},
+        {528, {"OrderCapacity", {{"A","Agency"},{"G","Proprietary"},{"I","Individual"},{"P","Principal"},{"R","Riskless Principal"},{"W","Agent for Other Member"}}}},
+        {529, {"OrderRestrictions", {}}},
+        {552, {"NoSides", {}}},
+        {555, {"NoLegs", {}}},
+        {556, {"LegCurrency", {}}},
+        {581, {"AccountType", {
+            {"1","Carried customer side"},{"2","House trader"},{"3","Floor trader"},
+            {"4","Carried customer side, cross margin"},{"5","Customer cross margin account"}
+        }}},
+        {584, {"MassStatusReqID", {}}},
+        {585, {"MassStatusReqType", {{"1","Status for orders for a security"},{"7","Status for all orders"}}}},
+        {608, {"ClearingFeeIndicator", {}}},
+        {624, {"LegSide", {{"1","Buy"},{"2","Sell"}}}},
+        {636, {"WorkingIndicator", {{"Y","Yes"},{"N","No"}}}},
+        {663, {"MidPx", {}}},
+        {711, {"NoUnderlyings", {}}},
+        {797, {"CopyMsgIndicator", {{"Y","Yes"},{"N","No"}}}},
+        {893, {"LastFragment", {{"Y","Yes"},{"N","No"}}}},
+        {925, {"DisregardFlag", {}}},
+
+        // ---- Trailer ----
+        {10,  {"CheckSum", {}}},
     };
     return dict;
 }
 
+// Tags that belong to the FIX Header
 static bool isHeaderTag(int tag) {
-    switch (tag) {
-        case 8: case 9: case 35: case 49: case 56: case 34: case 52:
-        case 50: case 57: case 115: case 128: case 142:
-            return true;
-        default:
-            return false;
-    }
+    static const std::unordered_set<int> headerTags = {
+        8, 9, 35, 49, 50, 56, 57, 34, 43, 52, 97, 115, 128, 142, 143, 369, 212, 213
+    };
+    return headerTags.count(tag) > 0;
 }
 
 static bool isTrailerTag(int tag) {
     return tag == 10 || tag == 89 || tag == 93;
+}
+
+// Repeating group counter tags -> the tag that starts each repeated entry
+// (count tag -> first tag of each group instance). Used to detect/group repeats.
+static const std::unordered_map<int, int>& getGroupStartTags() {
+    static const std::unordered_map<int, int> groups = {
+        {73, 11},    // NoOrders -> ClOrdID (simplified)
+        {78, 79},    // NoAllocs -> AllocAccount
+        {136, 137},  // NoMiscFees -> MiscFeeAmt
+        {268, 269},  // NoMDEntries -> MDEntryType
+        {267, 269},  // NoMDEntryTypes -> MDEntryType
+        {453, 448},  // NoPartyIDs -> PartyID
+        {555, 624},  // NoLegs -> LegSide
+        {552, 54},   // NoSides -> Side
+        {382, 448},  // NoContraBrokers -> PartyID (approx)
+    };
+    return groups;
+}
+
+// Required fields per MsgType (simplified but covering common business messages)
+static const std::unordered_map<std::string, std::vector<int>>& getRequiredFieldsByMsgType() {
+    static const std::unordered_map<std::string, std::vector<int>> req = {
+        {"D",  {11, 55, 54, 38, 40, 60}},                  // New Order Single
+        {"8",  {37, 11, 17, 150, 39, 55, 54, 14, 6}},       // Execution Report
+        {"F",  {41, 11, 55, 54, 60}},                       // Order Cancel Request
+        {"G",  {41, 11, 55, 54, 60}},                       // Order Cancel/Replace Request
+        {"9",  {11, 41, 39, 102}},                          // Order Cancel Reject
+        {"A",  {98, 108}},                                  // Logon
+        {"5",  {}},                                         // Logout
+        {"0",  {}},                                         // Heartbeat
+        {"1",  {112}},                                      // Test Request
+        {"3",  {45, 372, 373}},                             // Reject
+        {"j",  {372, 380}},                                 // Business Message Reject
+        {"V",  {262, 263, 264, 265}},                        // Market Data Request
+        {"W",  {262, 268}},                                 // Market Data Snapshot
+        {"R",  {131}},                                      // Quote Request
+    };
+    return req;
 }
 
 struct FixToken {
@@ -151,7 +435,6 @@ static std::vector<FixToken> tokenize(const std::string& msg, char delim) {
 
 static int calculateChecksum(const std::string& msg, char delim) {
     size_t checksumTagPos = std::string::npos;
-
     for (size_t i = 0; i + 3 <= msg.size(); ++i) {
         if (msg[i] == '1' && msg[i+1] == '0' && msg[i+2] == '=') {
             if (i == 0 || msg[i-1] == delim) {
@@ -159,9 +442,7 @@ static int calculateChecksum(const std::string& msg, char delim) {
             }
         }
     }
-
     size_t sumUpTo = (checksumTagPos != std::string::npos) ? checksumTagPos : msg.size();
-
     unsigned int sum = 0;
     for (size_t i = 0; i < sumUpTo; ++i) {
         sum += static_cast<unsigned char>(msg[i]);
@@ -233,6 +514,7 @@ int main() {
         std::vector<FixToken> tokens = tokenize(body, delim);
 
         const auto& dict = getDictionary();
+        const auto& groupStarts = getGroupStartTags();
 
         crow::json::wvalue result;
         result["status"] = "ok";
@@ -240,10 +522,17 @@ int main() {
         std::vector<crow::json::wvalue> headerArr;
         std::vector<crow::json::wvalue> bodyArr;
         std::vector<crow::json::wvalue> trailerArr;
+        std::vector<crow::json::wvalue> sequence; // every field in original order, annotated
 
         std::string msgType = "";
+        std::unordered_set<int> groupStartTagSet;
+        for (auto& kv : groupStarts) groupStartTagSet.insert(kv.second);
 
-        for (const auto& tok : tokens) {
+        int currentGroupIndex = -1;
+        int currentGroupCountTag = -1;
+
+        for (size_t idx = 0; idx < tokens.size(); ++idx) {
+            const auto& tok = tokens[idx];
             crow::json::wvalue entry;
             entry["tag"] = tok.tag;
 
@@ -251,8 +540,10 @@ int main() {
             entry["raw"] = rawVal;
 
             auto it = dict.find(tok.tag);
+            std::string fieldName;
             if (it != dict.end()) {
-                entry["name"] = it->second.name;
+                fieldName = it->second.name;
+                entry["name"] = fieldName;
                 auto vIt = it->second.values.find(rawVal);
                 if (vIt != it->second.values.end()) {
                     entry["meaning"] = vIt->second;
@@ -260,23 +551,47 @@ int main() {
                     entry["meaning"] = rawVal;
                 }
             } else {
-                entry["name"] = ("Unknown(" + std::to_string(tok.tag) + ")");
+                fieldName = "Unknown(" + std::to_string(tok.tag) + ")";
+                entry["name"] = fieldName;
                 entry["meaning"] = rawVal;
             }
+
+            // Detect if this tag is a repeating-group counter
+            bool isGroupCounter = groupStarts.count(tok.tag) > 0;
+            entry["isGroupCounter"] = isGroupCounter;
+
+            // Detect if this tag starts a new repeating group instance
+            bool isGroupStart = groupStartTagSet.count(tok.tag) > 0;
+            entry["isGroupStart"] = isGroupStart;
+            if (isGroupStart) {
+                currentGroupIndex++;
+            }
+            // Only tag group membership while we're inside body/group fields (not header/trailer)
+            bool withinGroupableSection = !isHeaderTag(tok.tag) && !isTrailerTag(tok.tag);
+            entry["groupIndex"] = (withinGroupableSection && currentGroupIndex >= 0) ? currentGroupIndex : -1;
 
             if (tok.tag == 35) {
                 msgType = rawVal;
             }
 
+            // step index for "loop by loop" frontend walkthrough
+            entry["stepIndex"] = static_cast<int>(idx);
+
+            crow::json::wvalue entryCopy1 = entry; // for sequence array
+            crow::json::wvalue entryCopy2 = entry; // for section array (header/body/trailer)
+
             if (isHeaderTag(tok.tag)) {
-                headerArr.push_back(std::move(entry));
+                headerArr.push_back(std::move(entryCopy2));
             } else if (isTrailerTag(tok.tag)) {
-                trailerArr.push_back(std::move(entry));
+                trailerArr.push_back(std::move(entryCopy2));
             } else {
-                bodyArr.push_back(std::move(entry));
+                bodyArr.push_back(std::move(entryCopy2));
             }
+
+            sequence.push_back(std::move(entryCopy1));
         }
 
+        // ---------- Validation ----------
         std::vector<crow::json::wvalue> errors;
         bool isValid = true;
 
@@ -327,32 +642,45 @@ int main() {
             }
         }
 
-        if (msgType == "D") {
-            std::vector<int> required = {11, 55, 54, 38, 40};
-            for (int reqTag : required) {
+        // Required fields per message type
+        const auto& reqMap = getRequiredFieldsByMsgType();
+        auto reqIt = reqMap.find(msgType);
+        if (reqIt != reqMap.end()) {
+            for (int reqTag : reqIt->second) {
                 bool found = false;
                 for (const auto& tok : tokens) {
                     if (tok.tag == reqTag) { found = true; break; }
                 }
                 if (!found) {
-                    const auto& d = getDictionary();
-                    std::string name = d.count(reqTag) ? d.at(reqTag).name : std::to_string(reqTag);
+                    std::string name = dict.count(reqTag) ? dict.at(reqTag).name : std::to_string(reqTag);
+                    std::string msgTypeName = dict.count(35) && dict.at(35).values.count(msgType)
+                        ? dict.at(35).values.at(msgType) : msgType;
                     errors.push_back(crow::json::wvalue(
-                        "Missing required field for NewOrderSingle: " + name + " (tag " + std::to_string(reqTag) + ")"));
+                        "Missing required field for " + msgTypeName + ": " + name + " (tag " + std::to_string(reqTag) + ")"));
                     isValid = false;
                 }
             }
         }
 
+        // ---------- Assemble Response ----------
         result["delimiterDetected"] = std::string(1, delim == '\x01' ? '^' : delim);
         result["isValid"] = isValid;
         result["validationErrors"] = std::move(errors);
+        result["msgType"] = msgType;
+        if (dict.count(35) && dict.at(35).values.count(msgType)) {
+            result["msgTypeName"] = dict.at(35).values.at(msgType);
+        } else {
+            result["msgTypeName"] = msgType.empty() ? "Unknown" : ("Unknown MsgType: " + msgType);
+        }
 
         crow::json::wvalue components;
         components["header"] = std::move(headerArr);
         components["body"] = std::move(bodyArr);
         components["trailer"] = std::move(trailerArr);
         result["components"] = std::move(components);
+
+        result["sequence"] = std::move(sequence);
+        result["totalFields"] = static_cast<int>(tokens.size());
 
         crow::json::wvalue checksumInfo;
         checksumInfo["calculated"] = calcChecksumStr;
@@ -379,7 +707,7 @@ int main() {
     });
 
     CROW_ROUTE(app, "/")([]() {
-        return "FIX Parser Backend is running";
+        return "FIX Parser Backend v2 is running";
     });
 
     app.port(18080).multithreaded().run();
