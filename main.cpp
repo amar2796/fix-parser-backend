@@ -545,6 +545,368 @@ static int calculateBodyLength(const std::string& msg, char delim) {
     return static_cast<int>(bodyEnd - bodyStart);
 }
 
+// ---------- Reusable single-message parser ----------
+// Used by both /api/parse (single message) and /api/parse-log (multi-message log).
+static crow::json::wvalue parseOneMessage(const std::string& body) {
+    crow::json::wvalue result;
+
+    if (body.empty()) {
+        result["status"] = "error";
+        result["message"] = "Empty input";
+        return result;
+    }
+
+    char delim = detectDelimiter(body);
+    std::vector<FixToken> tokens = tokenize(body, delim);
+
+    const auto& dict = getDictionary();
+    const auto& groupStarts = getGroupStartTags();
+
+    result["status"] = "ok";
+
+    std::vector<crow::json::wvalue> headerArr;
+    std::vector<crow::json::wvalue> bodyArr;
+    std::vector<crow::json::wvalue> trailerArr;
+    std::vector<crow::json::wvalue> sequence;
+
+    std::string msgType = "";
+    std::string senderCompID = "";
+    std::string targetCompID = "";
+    std::string sendingTime = "";
+    std::string clOrdID = "";
+    std::string origClOrdID = "";
+
+    std::unordered_set<int> groupStartTagSet;
+    for (auto& kv : groupStarts) groupStartTagSet.insert(kv.second);
+
+    int currentGroupIndex = -1;
+
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+        const auto& tok = tokens[idx];
+        crow::json::wvalue entry;
+        entry["tag"] = tok.tag;
+
+        std::string rawVal(tok.value);
+        entry["raw"] = rawVal;
+
+        auto it = dict.find(tok.tag);
+        std::string fieldName;
+        if (it != dict.end()) {
+            fieldName = it->second.name;
+            entry["name"] = fieldName;
+            auto vIt = it->second.values.find(rawVal);
+            if (vIt != it->second.values.end()) {
+                entry["meaning"] = vIt->second;
+            } else {
+                entry["meaning"] = rawVal;
+            }
+        } else {
+            fieldName = "Unknown(" + std::to_string(tok.tag) + ")";
+            entry["name"] = fieldName;
+            entry["meaning"] = rawVal;
+        }
+
+        const auto& whyMap = getWhyExplanations();
+        auto whyIt = whyMap.find(tok.tag);
+        if (whyIt != whyMap.end()) {
+            entry["why"] = whyIt->second;
+        } else {
+            entry["why"] = "Part of this message's data — not one of the most commonly explained fields, but still required by the FIX dictionary for this tag.";
+        }
+
+        bool isGroupCounter = groupStarts.count(tok.tag) > 0;
+        entry["isGroupCounter"] = isGroupCounter;
+
+        bool isGroupStart = groupStartTagSet.count(tok.tag) > 0;
+        entry["isGroupStart"] = isGroupStart;
+        if (isGroupStart) {
+            currentGroupIndex++;
+        }
+        bool withinGroupableSection = !isHeaderTag(tok.tag) && !isTrailerTag(tok.tag);
+        entry["groupIndex"] = (withinGroupableSection && currentGroupIndex >= 0) ? currentGroupIndex : -1;
+
+        // Capture key fields for session/timeline use
+        if (tok.tag == 35) msgType = rawVal;
+        if (tok.tag == 49) senderCompID = rawVal;
+        if (tok.tag == 56) targetCompID = rawVal;
+        if (tok.tag == 52) sendingTime = rawVal;
+        if (tok.tag == 11) clOrdID = rawVal;
+        if (tok.tag == 41) origClOrdID = rawVal;
+
+        entry["stepIndex"] = static_cast<int>(idx);
+
+        crow::json::wvalue entryCopy1 = entry;
+        crow::json::wvalue entryCopy2 = entry;
+
+        if (isHeaderTag(tok.tag)) {
+            headerArr.push_back(std::move(entryCopy2));
+        } else if (isTrailerTag(tok.tag)) {
+            trailerArr.push_back(std::move(entryCopy2));
+        } else {
+            bodyArr.push_back(std::move(entryCopy2));
+        }
+
+        sequence.push_back(std::move(entryCopy1));
+    }
+
+    // ---------- Validation ----------
+    std::vector<crow::json::wvalue> errors;
+    bool isValid = true;
+
+    int calcChecksum = calculateChecksum(body, delim);
+    std::string calcChecksumStr = padChecksum(calcChecksum);
+
+    std::string actualChecksum = "";
+    for (const auto& tok : tokens) {
+        if (tok.tag == 10) {
+            actualChecksum = std::string(tok.value);
+            break;
+        }
+    }
+
+    if (actualChecksum.empty()) {
+        errors.push_back(crow::json::wvalue("Missing CheckSum (tag 10)"));
+        isValid = false;
+    } else if (actualChecksum != calcChecksumStr) {
+        errors.push_back(crow::json::wvalue(
+            "CheckSum mismatch: expected " + calcChecksumStr + " but got " + actualChecksum));
+        isValid = false;
+    }
+
+    int calcBodyLen = calculateBodyLength(body, delim);
+    std::string actualBodyLen = "";
+    for (const auto& tok : tokens) {
+        if (tok.tag == 9) {
+            actualBodyLen = std::string(tok.value);
+            break;
+        }
+    }
+
+    if (actualBodyLen.empty()) {
+        errors.push_back(crow::json::wvalue("Missing BodyLength (tag 9)"));
+        isValid = false;
+    } else {
+        try {
+            int actualLenInt = std::stoi(actualBodyLen);
+            if (calcBodyLen != actualLenInt) {
+                errors.push_back(crow::json::wvalue(
+                    "BodyLength mismatch: expected " + std::to_string(calcBodyLen) +
+                    " but got " + std::to_string(actualLenInt)));
+                isValid = false;
+            }
+        } catch (...) {
+            errors.push_back(crow::json::wvalue("Invalid BodyLength value"));
+            isValid = false;
+        }
+    }
+
+    const auto& reqMap = getRequiredFieldsByMsgType();
+    auto reqIt = reqMap.find(msgType);
+    if (reqIt != reqMap.end()) {
+        for (int reqTag : reqIt->second) {
+            bool found = false;
+            for (const auto& tok : tokens) {
+                if (tok.tag == reqTag) { found = true; break; }
+            }
+            if (!found) {
+                std::string name = dict.count(reqTag) ? dict.at(reqTag).name : std::to_string(reqTag);
+                std::string msgTypeNameLocal = dict.count(35) && dict.at(35).values.count(msgType)
+                    ? dict.at(35).values.at(msgType) : msgType;
+                errors.push_back(crow::json::wvalue(
+                    "Missing required field for " + msgTypeNameLocal + ": " + name + " (tag " + std::to_string(reqTag) + ")"));
+                isValid = false;
+            }
+        }
+    }
+
+    // ---------- Assemble ----------
+    result["delimiterDetected"] = std::string(1, delim == '\x01' ? '^' : delim);
+    result["isValid"] = isValid;
+    result["validationErrors"] = std::move(errors);
+    result["msgType"] = msgType;
+    if (dict.count(35) && dict.at(35).values.count(msgType)) {
+        result["msgTypeName"] = dict.at(35).values.at(msgType);
+    } else {
+        result["msgTypeName"] = msgType.empty() ? "Unknown" : ("Unknown MsgType: " + msgType);
+    }
+
+    crow::json::wvalue components;
+    components["header"] = std::move(headerArr);
+    components["body"] = std::move(bodyArr);
+    components["trailer"] = std::move(trailerArr);
+    result["components"] = std::move(components);
+
+    result["sequence"] = std::move(sequence);
+    result["totalFields"] = static_cast<int>(tokens.size());
+
+    crow::json::wvalue checksumInfo;
+    checksumInfo["calculated"] = calcChecksumStr;
+    checksumInfo["actual"] = actualChecksum;
+    result["checksum"] = std::move(checksumInfo);
+
+    crow::json::wvalue bodyLenInfo;
+    bodyLenInfo["calculated"] = calcBodyLen;
+    bodyLenInfo["actual"] = actualBodyLen;
+    result["bodyLength"] = std::move(bodyLenInfo);
+
+    // Extra top-level fields for session/timeline display
+    result["senderCompID"] = senderCompID;
+    result["targetCompID"] = targetCompID;
+    result["sendingTime"] = sendingTime;
+    result["clOrdID"] = clOrdID;
+    result["origClOrdID"] = origClOrdID;
+    result["rawMessage"] = body;
+
+    return result;
+}
+
+// ---------- Auto-summary generator ----------
+// Builds a short human-readable one-line summary for a parsed message,
+// used in the multi-message Timeline view.
+static std::string fieldRaw(const std::vector<FixToken>& tokens, int tag) {
+    for (const auto& t : tokens) {
+        if (t.tag == tag) return std::string(t.value);
+    }
+    return "";
+}
+
+static std::string formatQty(const std::string& q) {
+    if (q.empty()) return q;
+    try {
+        long long val = std::stoll(q);
+        std::string s = std::to_string(val);
+        std::string out;
+        int count = 0;
+        for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
+            out = s[i] + out;
+            count++;
+            if (count % 3 == 0 && i != 0) out = "," + out;
+        }
+        return out;
+    } catch (...) {
+        return q;
+    }
+}
+
+static std::string buildSummary(const std::string& body, char delim) {
+    std::vector<FixToken> tokens = tokenize(body, delim);
+    std::string msgType = fieldRaw(tokens, 35);
+    const auto& dict = getDictionary();
+
+    auto sideWord = [&](const std::string& sideVal) -> std::string {
+        if (sideVal == "1") return "Buy";
+        if (sideVal == "2") return "Sell";
+        if (sideVal == "5") return "Sell short";
+        return sideVal.empty() ? "" : "Side(" + sideVal + ")";
+    };
+
+    if (msgType == "D") { // New Order Single
+        std::string side = sideWord(fieldRaw(tokens, 54));
+        std::string qty = formatQty(fieldRaw(tokens, 38));
+        std::string sym = fieldRaw(tokens, 55);
+        std::string px = fieldRaw(tokens, 44);
+        std::string ordType = fieldRaw(tokens, 40);
+        std::string s = side + " " + qty + " " + sym;
+        if (!px.empty() && ordType != "1") s += " @ " + px;
+        return s;
+    }
+    if (msgType == "8") { // Execution Report
+        std::string execType = fieldRaw(tokens, 150);
+        std::string ordStatus = fieldRaw(tokens, 39);
+        std::string side = sideWord(fieldRaw(tokens, 54));
+        std::string sym = fieldRaw(tokens, 55);
+        std::string lastShares = fieldRaw(tokens, 32);
+        std::string lastPx = fieldRaw(tokens, 31);
+        std::string avgPx = fieldRaw(tokens, 6);
+        std::string cumQty = fieldRaw(tokens, 14);
+
+        if (execType == "0" || ordStatus == "0") {
+            return side + " " + formatQty(fieldRaw(tokens, 38)) + " " + sym + " (Acknowledged)";
+        }
+        if (execType == "8" || ordStatus == "8") {
+            std::string text = fieldRaw(tokens, 58);
+            return "Rejected" + (text.empty() ? std::string("") : (": " + text));
+        }
+        if (execType == "4" || ordStatus == "4") {
+            return "Canceled " + sym;
+        }
+        // Fill / Partial fill
+        std::string qtyPart = !lastShares.empty() ? formatQty(lastShares) : formatQty(cumQty);
+        std::string s = side + " " + qtyPart + " " + sym;
+        if (!lastPx.empty()) s += " @ " + lastPx;
+        if (!avgPx.empty()) s += " · avg px " + avgPx;
+        return s;
+    }
+    if (msgType == "F" || msgType == "G") { // Cancel Request / Replace
+        std::string side = sideWord(fieldRaw(tokens, 54));
+        std::string sym = fieldRaw(tokens, 55);
+        std::string qty = formatQty(fieldRaw(tokens, 38));
+        std::string s = (msgType == "F" ? std::string("Cancel request: ") : std::string("Replace request: "));
+        s += side;
+        if (!side.empty() && !sym.empty()) s += " ";
+        s += sym;
+        if (!qty.empty() && qty != "0") s += " " + qty;
+        return s;
+    }
+    if (msgType == "9") { // Order Cancel Reject
+        std::string reason = fieldRaw(tokens, 102);
+        std::string reasonText = (dict.count(102) && dict.at(102).values.count(reason))
+            ? dict.at(102).values.at(reason) : reason;
+        return "Cancel rejected" + (reasonText.empty() ? std::string("") : (": " + reasonText));
+    }
+    if (msgType == "3") { // Reject
+        std::string text = fieldRaw(tokens, 58);
+        std::string reasonCode = fieldRaw(tokens, 373);
+        std::string reasonText = (dict.count(373) && dict.at(373).values.count(reasonCode))
+            ? dict.at(373).values.at(reasonCode) : "";
+        if (!text.empty()) return text;
+        if (!reasonText.empty()) return reasonText;
+        return "Unsupported message type";
+    }
+    if (msgType == "j") { // Business Message Reject
+        std::string text = fieldRaw(tokens, 58);
+        return text.empty() ? "Business message rejected" : text;
+    }
+    if (msgType == "A") return "Logon";
+    if (msgType == "5") return "Logout";
+    if (msgType == "0") return "Heartbeat";
+    if (msgType == "1") return "Test Request";
+
+    // Fallback: just show the message type name
+    if (dict.count(35) && dict.at(35).values.count(msgType)) {
+        return dict.at(35).values.at(msgType);
+    }
+    return "Unknown message";
+}
+
+// Splits a raw multi-message log block into individual FIX messages.
+// Each message always starts with "8=FIX" (BeginString) — used as the boundary marker.
+static std::vector<std::string> splitLogIntoMessages(const std::string& log) {
+    std::vector<std::string> messages;
+    std::vector<size_t> starts;
+
+    size_t pos = 0;
+    while (true) {
+        size_t found = log.find("8=FIX", pos);
+        if (found == std::string::npos) break;
+        starts.push_back(found);
+        pos = found + 5;
+    }
+
+    for (size_t i = 0; i < starts.size(); ++i) {
+        size_t begin = starts[i];
+        size_t end = (i + 1 < starts.size()) ? starts[i + 1] : log.size();
+        std::string msg = log.substr(begin, end - begin);
+        // trim trailing whitespace/newlines
+        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' ')) {
+            msg.pop_back();
+        }
+        if (!msg.empty()) messages.push_back(msg);
+    }
+
+    return messages;
+}
+
 int main() {
     crow::SimpleApp app;
 
@@ -566,200 +928,71 @@ int main() {
             return response;
         }
 
-        char delim = detectDelimiter(body);
-        std::vector<FixToken> tokens = tokenize(body, delim);
+        crow::json::wvalue result = parseOneMessage(body);
+        response.body = result.dump();
+        response.code = 200;
+        return response;
+    });
 
-        const auto& dict = getDictionary();
-        const auto& groupStarts = getGroupStartTags();
+    CROW_ROUTE(app, "/api/parse-log").methods("POST"_method)
+    ([](const crow::request& req) {
+        std::string logBody = req.body;
+
+        crow::response response;
+        response.add_header("Access-Control-Allow-Origin", "*");
+        response.add_header("Access-Control-Allow-Headers", "Content-Type");
+        response.add_header("Content-Type", "application/json");
+
+        if (logBody.empty()) {
+            crow::json::wvalue err;
+            err["status"] = "error";
+            err["message"] = "Empty input";
+            response.body = err.dump();
+            response.code = 400;
+            return response;
+        }
+
+        std::vector<std::string> messages = splitLogIntoMessages(logBody);
+
+        if (messages.empty()) {
+            crow::json::wvalue err;
+            err["status"] = "error";
+            err["message"] = "No valid FIX messages found (expected each message to start with 8=FIX)";
+            response.body = err.dump();
+            response.code = 400;
+            return response;
+        }
+
+        std::vector<crow::json::wvalue> parsedMessages;
+
+        for (size_t i = 0; i < messages.size(); ++i) {
+            const std::string& msg = messages[i];
+            crow::json::wvalue parsed = parseOneMessage(msg);
+
+            char delim = detectDelimiter(msg);
+            std::string summary = buildSummary(msg, delim);
+            parsed["summary"] = summary;
+            parsed["logIndex"] = static_cast<int>(i);
+
+            parsedMessages.push_back(std::move(parsed));
+        }
 
         crow::json::wvalue result;
         result["status"] = "ok";
-
-        std::vector<crow::json::wvalue> headerArr;
-        std::vector<crow::json::wvalue> bodyArr;
-        std::vector<crow::json::wvalue> trailerArr;
-        std::vector<crow::json::wvalue> sequence; // every field in original order, annotated
-
-        std::string msgType = "";
-        std::unordered_set<int> groupStartTagSet;
-        for (auto& kv : groupStarts) groupStartTagSet.insert(kv.second);
-
-        int currentGroupIndex = -1;
-        int currentGroupCountTag = -1;
-
-        for (size_t idx = 0; idx < tokens.size(); ++idx) {
-            const auto& tok = tokens[idx];
-            crow::json::wvalue entry;
-            entry["tag"] = tok.tag;
-
-            std::string rawVal(tok.value);
-            entry["raw"] = rawVal;
-
-            auto it = dict.find(tok.tag);
-            std::string fieldName;
-            if (it != dict.end()) {
-                fieldName = it->second.name;
-                entry["name"] = fieldName;
-                auto vIt = it->second.values.find(rawVal);
-                if (vIt != it->second.values.end()) {
-                    entry["meaning"] = vIt->second;
-                } else {
-                    entry["meaning"] = rawVal;
-                }
-            } else {
-                fieldName = "Unknown(" + std::to_string(tok.tag) + ")";
-                entry["name"] = fieldName;
-                entry["meaning"] = rawVal;
-            }
-
-            // Plain-English "why this matters" explanation, for teaching mode
-            const auto& whyMap = getWhyExplanations();
-            auto whyIt = whyMap.find(tok.tag);
-            if (whyIt != whyMap.end()) {
-                entry["why"] = whyIt->second;
-            } else {
-                entry["why"] = "Part of this message's data — not one of the most commonly explained fields, but still required by the FIX dictionary for this tag.";
-            }
-
-
-            // Detect if this tag is a repeating-group counter
-            bool isGroupCounter = groupStarts.count(tok.tag) > 0;
-            entry["isGroupCounter"] = isGroupCounter;
-
-            // Detect if this tag starts a new repeating group instance
-            bool isGroupStart = groupStartTagSet.count(tok.tag) > 0;
-            entry["isGroupStart"] = isGroupStart;
-            if (isGroupStart) {
-                currentGroupIndex++;
-            }
-            // Only tag group membership while we're inside body/group fields (not header/trailer)
-            bool withinGroupableSection = !isHeaderTag(tok.tag) && !isTrailerTag(tok.tag);
-            entry["groupIndex"] = (withinGroupableSection && currentGroupIndex >= 0) ? currentGroupIndex : -1;
-
-            if (tok.tag == 35) {
-                msgType = rawVal;
-            }
-
-            // step index for "loop by loop" frontend walkthrough
-            entry["stepIndex"] = static_cast<int>(idx);
-
-            crow::json::wvalue entryCopy1 = entry; // for sequence array
-            crow::json::wvalue entryCopy2 = entry; // for section array (header/body/trailer)
-
-            if (isHeaderTag(tok.tag)) {
-                headerArr.push_back(std::move(entryCopy2));
-            } else if (isTrailerTag(tok.tag)) {
-                trailerArr.push_back(std::move(entryCopy2));
-            } else {
-                bodyArr.push_back(std::move(entryCopy2));
-            }
-
-            sequence.push_back(std::move(entryCopy1));
-        }
-
-        // ---------- Validation ----------
-        std::vector<crow::json::wvalue> errors;
-        bool isValid = true;
-
-        int calcChecksum = calculateChecksum(body, delim);
-        std::string calcChecksumStr = padChecksum(calcChecksum);
-
-        std::string actualChecksum = "";
-        for (const auto& tok : tokens) {
-            if (tok.tag == 10) {
-                actualChecksum = std::string(tok.value);
-                break;
-            }
-        }
-
-        if (actualChecksum.empty()) {
-            errors.push_back(crow::json::wvalue("Missing CheckSum (tag 10)"));
-            isValid = false;
-        } else if (actualChecksum != calcChecksumStr) {
-            errors.push_back(crow::json::wvalue(
-                "CheckSum mismatch: expected " + calcChecksumStr + " but got " + actualChecksum));
-            isValid = false;
-        }
-
-        int calcBodyLen = calculateBodyLength(body, delim);
-        std::string actualBodyLen = "";
-        for (const auto& tok : tokens) {
-            if (tok.tag == 9) {
-                actualBodyLen = std::string(tok.value);
-                break;
-            }
-        }
-
-        if (actualBodyLen.empty()) {
-            errors.push_back(crow::json::wvalue("Missing BodyLength (tag 9)"));
-            isValid = false;
-        } else {
-            try {
-                int actualLenInt = std::stoi(actualBodyLen);
-                if (calcBodyLen != actualLenInt) {
-                    errors.push_back(crow::json::wvalue(
-                        "BodyLength mismatch: expected " + std::to_string(calcBodyLen) +
-                        " but got " + std::to_string(actualLenInt)));
-                    isValid = false;
-                }
-            } catch (...) {
-                errors.push_back(crow::json::wvalue("Invalid BodyLength value"));
-                isValid = false;
-            }
-        }
-
-        // Required fields per message type
-        const auto& reqMap = getRequiredFieldsByMsgType();
-        auto reqIt = reqMap.find(msgType);
-        if (reqIt != reqMap.end()) {
-            for (int reqTag : reqIt->second) {
-                bool found = false;
-                for (const auto& tok : tokens) {
-                    if (tok.tag == reqTag) { found = true; break; }
-                }
-                if (!found) {
-                    std::string name = dict.count(reqTag) ? dict.at(reqTag).name : std::to_string(reqTag);
-                    std::string msgTypeName = dict.count(35) && dict.at(35).values.count(msgType)
-                        ? dict.at(35).values.at(msgType) : msgType;
-                    errors.push_back(crow::json::wvalue(
-                        "Missing required field for " + msgTypeName + ": " + name + " (tag " + std::to_string(reqTag) + ")"));
-                    isValid = false;
-                }
-            }
-        }
-
-        // ---------- Assemble Response ----------
-        result["delimiterDetected"] = std::string(1, delim == '\x01' ? '^' : delim);
-        result["isValid"] = isValid;
-        result["validationErrors"] = std::move(errors);
-        result["msgType"] = msgType;
-        if (dict.count(35) && dict.at(35).values.count(msgType)) {
-            result["msgTypeName"] = dict.at(35).values.at(msgType);
-        } else {
-            result["msgTypeName"] = msgType.empty() ? "Unknown" : ("Unknown MsgType: " + msgType);
-        }
-
-        crow::json::wvalue components;
-        components["header"] = std::move(headerArr);
-        components["body"] = std::move(bodyArr);
-        components["trailer"] = std::move(trailerArr);
-        result["components"] = std::move(components);
-
-        result["sequence"] = std::move(sequence);
-        result["totalFields"] = static_cast<int>(tokens.size());
-
-        crow::json::wvalue checksumInfo;
-        checksumInfo["calculated"] = calcChecksumStr;
-        checksumInfo["actual"] = actualChecksum;
-        result["checksum"] = std::move(checksumInfo);
-
-        crow::json::wvalue bodyLenInfo;
-        bodyLenInfo["calculated"] = calcBodyLen;
-        bodyLenInfo["actual"] = actualBodyLen;
-        result["bodyLength"] = std::move(bodyLenInfo);
+        result["totalMessages"] = static_cast<int>(messages.size());
+        result["messages"] = std::move(parsedMessages);
 
         response.body = result.dump();
         response.code = 200;
+        return response;
+    });
+
+    CROW_ROUTE(app, "/api/parse-log").methods("OPTIONS"_method)
+    ([](const crow::request&) {
+        crow::response response(204);
+        response.add_header("Access-Control-Allow-Origin", "*");
+        response.add_header("Access-Control-Allow-Methods", "POST, OPTIONS");
+        response.add_header("Access-Control-Allow-Headers", "Content-Type");
         return response;
     });
 
