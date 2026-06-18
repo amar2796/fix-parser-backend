@@ -1364,10 +1364,41 @@ static crow::json::wvalue parseOneMessage(const std::string& body) {
     std::string clOrdID = "";
     std::string origClOrdID = "";
 
-    std::unordered_set<int> groupStartTagSet;
-    for (auto& kv : groupStarts) groupStartTagSet.insert(kv.second);
+    // Build reverse lookup: group-start-tag -> the counter tag that activates it.
+    // (Multiple counters could theoretically map to the same start tag, e.g. 267/268
+    // both map to 269 — we just need to know if ANY relevant counter is present.)
+    std::unordered_map<int, std::vector<int>> startTagToCounters;
+    for (auto& kv : groupStarts) {
+        startTagToCounters[kv.second].push_back(kv.first);
+    }
+
+    // Determine which counter tags actually appear in THIS message — only these
+    // activate repeating-group detection. This prevents false positives where a
+    // tag number happens to match a "group start" value (e.g. tag 54/Side is the
+    // group-start for NoSides, but a plain order's Side field is not a repeating
+    // group instance unless NoSides/552 is actually present).
+    std::unordered_set<int> activeCounterTags;
+    for (const auto& tok : tokens) {
+        if (groupStarts.count(tok.tag) > 0) {
+            activeCounterTags.insert(tok.tag);
+        }
+    }
+
+    // A start tag is "live" only if at least one of its associated counters is
+    // actually present in this message.
+    std::unordered_set<int> liveGroupStartTags;
+    for (auto& kv : startTagToCounters) {
+        int startTag = kv.first;
+        for (int counterTag : kv.second) {
+            if (activeCounterTags.count(counterTag) > 0) {
+                liveGroupStartTags.insert(startTag);
+                break;
+            }
+        }
+    }
 
     int currentGroupIndex = -1;
+    bool anyCounterSeenSoFar = false;
 
     // Pre-scan for BeginString (tag 8) so we know which FIX version to link to
     // for "learn more" / unknown-tag reference URLs.
@@ -1420,13 +1451,20 @@ static crow::json::wvalue parseOneMessage(const std::string& body) {
         bool isGroupCounter = groupStarts.count(tok.tag) > 0;
         entry["isGroupCounter"] = isGroupCounter;
 
-        bool isGroupStart = groupStartTagSet.count(tok.tag) > 0;
+        if (isGroupCounter) {
+            anyCounterSeenSoFar = true;
+        }
+
+        // Only a "live" group-start tag (one whose counter actually appeared in
+        // this message) AND only once we've actually passed that counter in the
+        // token stream counts as a real repeating-group instance boundary.
+        bool isGroupStart = anyCounterSeenSoFar && liveGroupStartTags.count(tok.tag) > 0;
         entry["isGroupStart"] = isGroupStart;
         if (isGroupStart) {
             currentGroupIndex++;
         }
         bool withinGroupableSection = !isHeaderTag(tok.tag) && !isTrailerTag(tok.tag);
-        entry["groupIndex"] = (withinGroupableSection && currentGroupIndex >= 0) ? currentGroupIndex : -1;
+        entry["groupIndex"] = (withinGroupableSection && anyCounterSeenSoFar && currentGroupIndex >= 0) ? currentGroupIndex : -1;
 
         // Capture key fields for session/timeline use
         if (tok.tag == 35) msgType = rawVal;
