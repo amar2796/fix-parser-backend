@@ -1259,6 +1259,7 @@ static std::vector<FixToken> tokenize(const std::string& msg, char delim) {
 }
 
 static int calculateChecksum(const std::string& msg, char delim) {
+    // Find the position of the "10=" tag (checksum field) — sum everything before it.
     size_t checksumTagPos = std::string::npos;
     for (size_t i = 0; i + 3 <= msg.size(); ++i) {
         if (msg[i] == '1' && msg[i+1] == '0' && msg[i+2] == '=') {
@@ -1268,9 +1269,21 @@ static int calculateChecksum(const std::string& msg, char delim) {
         }
     }
     size_t sumUpTo = (checksumTagPos != std::string::npos) ? checksumTagPos : msg.size();
+
+    // FIX spec section 4.3: the checksum is computed over the raw on-wire bytes
+    // where every field separator is SOH (ASCII 0x01, value 1).  When a user
+    // pastes a message using a display delimiter ('|', '^', ';' etc.) we must
+    // treat those delimiter characters as value 1 for the sum — otherwise a '|'
+    // (value 124) contributes 123 extra per field and the calculated checksum
+    // will never match the embedded one.
+    const bool normaliseDelim = (delim != '\x01');
     unsigned int sum = 0;
     for (size_t i = 0; i < sumUpTo; ++i) {
-        sum += static_cast<unsigned char>(msg[i]);
+        unsigned char byte = static_cast<unsigned char>(msg[i]);
+        if (normaliseDelim && msg[i] == delim) {
+            byte = 1; // treat as SOH
+        }
+        sum += byte;
     }
     return static_cast<int>(sum % 256);
 }
