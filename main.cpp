@@ -10,7 +10,6 @@
 struct TagInfo {
     std::string name;
     std::unordered_map<std::string, std::string> values;
-    std::string why; // plain-English explanation of why this field matters
 };
 
 static const std::unordered_map<int, TagInfo>& getDictionary() {
@@ -1911,6 +1910,37 @@ int main() {
             return response;
         }
 
+        // Reject payloads larger than 10 MB to prevent memory exhaustion.
+        constexpr size_t MAX_BODY = 10 * 1024 * 1024;
+        if (body.size() > MAX_BODY) {
+            crow::json::wvalue err;
+            err["status"] = "error";
+            err["message"] = "Payload too large (max 10 MB). Use /api/parse-log for multi-message blobs.";
+            response.body = err.dump();
+            response.code = 413;
+            return response;
+        }
+
+        // Auto-detect multi-message input: if the body contains more than one
+        // "8=FIX" start marker, redirect internally to the log parser instead of
+        // silently truncating everything after the first message.
+        size_t fixCount = 0;
+        size_t searchPos = 0;
+        while ((searchPos = body.find("8=FIX", searchPos)) != std::string::npos) {
+            ++fixCount;
+            searchPos += 5;
+            if (fixCount > 1) break;
+        }
+
+        if (fixCount > 1) {
+            crow::json::wvalue warn;
+            warn["status"] = "error";
+            warn["message"] = "Multiple FIX messages detected. Please use /api/parse-log for multi-message input.";
+            response.body = warn.dump();
+            response.code = 400;
+            return response;
+        }
+
         crow::json::wvalue result = parseOneMessage(body);
         response.body = result.dump();
         response.code = 200;
@@ -1932,6 +1962,17 @@ int main() {
             err["message"] = "Empty input";
             response.body = err.dump();
             response.code = 400;
+            return response;
+        }
+
+        // Reject payloads larger than 10 MB to prevent memory exhaustion.
+        constexpr size_t MAX_BODY = 10 * 1024 * 1024;
+        if (logBody.size() > MAX_BODY) {
+            crow::json::wvalue err;
+            err["status"] = "error";
+            err["message"] = "Payload too large (max 10 MB).";
+            response.body = err.dump();
+            response.code = 413;
             return response;
         }
 
