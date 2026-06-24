@@ -2046,5 +2046,16 @@ int main() {
         return "FIX Parser Backend v2 is running";
     });
 
+    // ── Health check — keeps Render instance warm, used by uptime monitors ──
+    CROW_ROUTE(app, "/health").methods("GET"_method)
+    ([]() {
+        crow::response response;
+        response.add_header("Access-Control-Allow-Origin", "*");
+        response.add_header("Content-Type", "application/json");
+        response.body = "{\"status\":\"ok\"}";
+        response.code = 200;
+        return response;
+    });
+
     app.port(18080).multithreaded().run();
 }
